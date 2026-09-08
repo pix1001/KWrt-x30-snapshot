@@ -1,27 +1,15 @@
-name: Build TOTOLINK X30 ImmortalWrt Snapshot
+name: Build TOTOLINK X30 KWRT
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "config/x30.config"
-      - "patches/**"
-      - ".github/workflows/build-x30-snapshot.yml"
-  schedule:
-    - cron: "0 3 * * 6"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: x30-immortalwrt-release
-  cancel-in-progress: false
+  contents: read
 
 env:
-  X30_PATCH_COMMIT: 1e4bed859aeb3c7047ee602866d833efed853e2d
-  BUILD_JOBS: 2
+  KWRT_BRANCH: "25.12"
+  OPENWRT_BRANCH: "openwrt-25.12"
+  BUILD_JOBS: "2"
 
 jobs:
   build:
@@ -29,421 +17,394 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout builder repository
-        uses: actions/checkout@v6
-
-      - name: Show builder repository contents
-        shell: bash
-        run: |
-          set -euo pipefail
-          find . -maxdepth 3 -type f | sort
-
-      - name: Validate builder inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          required_files=(
-            config/x30.config
-            patches/0001-mediatek-add-TOTOLINK-X30-support.patch
-          )
-
-          for file in "${required_files[@]}"; do
-            if [ ! -s "${file}" ]; then
-              echo "ERROR: Required builder input is missing or empty: ${file}"
-              exit 1
-            fi
-          done
-
-          required_config_symbols=(
-            CONFIG_TARGET_mediatek=y
-            CONFIG_TARGET_mediatek_filogic=y
-            CONFIG_TARGET_mediatek_filogic_DEVICE_totolink_X30=y
-            CONFIG_PACKAGE_luci=y
-            CONFIG_PACKAGE_luci-ssl=y
-          )
-
-          for symbol in "${required_config_symbols[@]}"; do
-            if ! grep -Fxq "${symbol}" config/x30.config; then
-              echo "ERROR: Required line is missing from config/x30.config: ${symbol}"
-              exit 1
-            fi
-          done
-
-          if grep -q 'compatible = "totolink,X30", "mediatek,mt7981";' patches/0001-mediatek-add-TOTOLINK-X30-support.patch; then
-            echo "ERROR: Patch 0001 still contains the broken uppercase Linux DTS compatible string."
-            exit 1
-          fi
-
-          if ! grep -q 'compatible = "totolink,x30", "mediatek,mt7981";' patches/0001-mediatek-add-TOTOLINK-X30-support.patch; then
-            echo "ERROR: Patch 0001 does not contain the fixed lowercase Linux DTS compatible string."
-            exit 1
-          fi
-
-          if ! grep -q 'SUPPORTED_DEVICES := totolink,X30 totolink,x30' patches/0001-mediatek-add-TOTOLINK-X30-support.patch; then
-            echo "ERROR: Patch 0001 does not contain both legacy and fixed supported-device names."
-            exit 1
-          fi
-
-
-      - name: Set ImmortalWrt Snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          IMMORTALWRT_REF="master"
-          IMMORTALWRT_VERSION="SNAPSHOT"
-
-          echo "ImmortalWrt branch: ${IMMORTALWRT_REF}"
-          echo "ImmortalWrt version: ${IMMORTALWRT_VERSION}"
-
-          echo "IMMORTALWRT_VERSION=${IMMORTALWRT_VERSION}" >> "$GITHUB_ENV"
-          echo "IMMORTALWRT_REF=${IMMORTALWRT_REF}" >> "$GITHUB_ENV"
+      - name: Checkout builder
+        uses: actions/checkout@v4
 
       - name: Free disk space
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           df -h
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
           df -h
 
-      - name: Install build dependencies
+      - name: Install dependencies
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           sudo apt-get update
           sudo apt-get install -y \
             build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git \
             libncurses-dev libssl-dev libelf-dev \
             python3 python3-pyelftools python3-setuptools \
-            rsync swig unzip zlib1g-dev file wget curl time jq
+            rsync swig unzip zlib1g-dev file wget curl \
+            time jq dwarves llvm libpython3-dev aria2 \
+            ccache rename device-tree-compiler \
+            libgmp3-dev libmpc-dev libfuse-dev
 
-
-      - name: Clone ImmortalWrt Snapshot
+      - name: Clone KWRT recipes
         shell: bash
         run: |
-          set -euo pipefail
-
+          set -e
           git clone \
-            --branch "${IMMORTALWRT_REF}" \
-            --single-branch \
-            https://github.com/immortalwrt/immortalwrt.git openwrt
+            --depth 1 \
+            --branch "${KWRT_BRANCH}" \
+            https://github.com/kiddin9/Kwrt.git \
+            kwrt
 
-          cd openwrt
+          echo "KWRT HEAD:"
+          git -C kwrt log -1 --oneline
 
-          echo "ImmortalWrt Snapshot branch:"
-          git branch --show-current
-
-          echo "ImmortalWrt HEAD:"
-          git log -1 --oneline
-
-          echo "Resolved commit:"
-          git rev-parse HEAD
-
-      - name: Prepare X30 source tree
-        id: prep
+      - name: Clone OpenWrt 25.12
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
+          git clone \
+            --depth 1 \
+            --branch "${OPENWRT_BRANCH}" \
+            https://github.com/openwrt/openwrt.git \
+            openwrt
+
+          echo "OpenWrt HEAD:"
+          git -C openwrt log -1 --oneline
+
+      - name: Install KWRT customizations
+        env:
+          REPO_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -e
+
+          # Ikuti struktur build KWRT resmi
+          cp -rf kwrt/devices/common/. openwrt/
+          cp -rf kwrt/devices/mediatek_filogic/. openwrt/
+          cp -rf kwrt/devices openwrt/
 
           cd openwrt
-          git config user.name "x30-builder"
-          git config user.email "x30-builder@example.invalid"
 
-          required_openwrt_paths=(
-            target/linux/mediatek/image/filogic.mk
-            target/linux/mediatek/filogic/base-files/lib/upgrade/platform.sh
+          # Function yang dibutuhkan oleh KWRT common diy.sh
+          function git_clone_path() {
+            branch="$1"
+            rurl="$2"
+            mv_mode="$3"
+
+            if [ "$mv_mode" != "mv" ]; then
+              shift 2
+            else
+              shift 3
+            fi
+
+            rootdir="$PWD"
+            tmpdir="$(mktemp -d)"
+
+            if [ ${#branch} -lt 10 ]; then
+              git clone \
+                -b "$branch" \
+                --depth 1 \
+                --filter=blob:none \
+                --sparse \
+                "$rurl" \
+                "$tmpdir"
+            else
+              git clone \
+                --filter=blob:none \
+                --sparse \
+                "$rurl" \
+                "$tmpdir"
+
+              cd "$tmpdir"
+              git checkout "$branch"
+              cd "$rootdir"
+            fi
+
+            cd "$tmpdir"
+
+            git sparse-checkout init --cone
+            git sparse-checkout set "$@"
+
+            if [ "$mv_mode" != "mv" ]; then
+              cp -rn ./* "$rootdir/"
+            else
+              mv -n "$@"/* "$rootdir/$@/"
+            fi
+
+            cd "$rootdir"
+            rm -rf "$tmpdir"
+          }
+
+          export -f git_clone_path
+          export TARGET="mediatek_filogic"
+          export REPO_TOKEN="${REPO_TOKEN}"
+
+          echo "Running KWRT common diy.sh..."
+          bash devices/common/diy.sh
+
+          echo "Running KWRT MediaTek Filogic diy.sh..."
+          bash devices/mediatek_filogic/diy.sh
+
+          # File overlay KWRT
+          cp -Rf ./diy/* ./ 2>/dev/null || true
+
+      - name: Apply KWRT patches
+        shell: bash
+        run: |
+          set -e
+          cd openwrt
+
+          mkdir -p devices/mediatek_filogic/patches
+
+          if [ -d devices/common/patches ]; then
+            cp -rn \
+              devices/common/patches/. \
+              devices/mediatek_filogic/patches/ || true
+          fi
+
+          echo "Applying KWRT revert patches..."
+
+          while IFS= read -r -d '' patchfile; do
+            echo "Reverting: $patchfile"
+            patch \
+              -d ./ \
+              -R \
+              --no-backup-if-mismatch \
+              -p1 \
+              -F1 \
+              -i "$patchfile"
+          done < <(
+            find devices/mediatek_filogic/patches \
+              -maxdepth 1 \
+              -type f \
+              -name '*.revert.patch' \
+              -print0 | sort -z
           )
 
-          for path in "${required_openwrt_paths[@]}"; do
-            if [ ! -f "${path}" ]; then
-              echo "ERROR: Expected ImmortalWrt path is missing in ${IMMORTALWRT_REF}: ${path}"
-              echo "The latest Snapshot may have moved files that this builder patches."
-              exit 1
-            fi
-          done
+          echo "Applying KWRT normal patches..."
 
-          UPSTREAM_SHA="$(git rev-parse --short=12 HEAD)"
-          CONFIG_HASH="$(sha256sum \
-            ../config/x30.config \
-            ../patches/0001-mediatek-add-TOTOLINK-X30-support.patch \
-            ../.github/workflows/build-x30-snapshot.yml \
-            | sha256sum | cut -c1-12)"
+          while IFS= read -r -d '' patchfile; do
+            echo "Applying: $patchfile"
+            patch \
+              -d ./ \
+              --no-backup-if-mismatch \
+              -p1 \
+              -F1 \
+              -i "$patchfile"
+          done < <(
+            find devices/mediatek_filogic/patches \
+              -maxdepth 1 \
+              -type f \
+              -name '*.patch' \
+              ! -name '*.revert.patch' \
+              ! -name '*.bin.patch' \
+              -print0 | sort -z
+          )
 
-          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
-          echo "config_hash=${CONFIG_HASH}" >> "$GITHUB_OUTPUT"
-          echo "immortalwrt_version=${IMMORTALWRT_VERSION}" >> "$GITHUB_OUTPUT"
+      - name: Apply TOTOLINK X30 support
+        shell: bash
+        run: |
+          set -e
+          cd openwrt
 
-          if grep -q "Device/totolink_X30" target/linux/mediatek/image/filogic.mk; then
-            echo "X30 image profile already exists in ${IMMORTALWRT_REF}; not applying profile patch."
-            PATCH_ID="official"
+          echo "Checking X30 profile..."
+
+          if grep -q \
+            'Device/totolink_X30' \
+            target/linux/mediatek/image/filogic.mk; then
+
+            echo "X30 already exists upstream."
           else
-            echo "Applying pinned X30 board-support patch: ${X30_PATCH_COMMIT}"
-            git am --3way "../patches/0001-mediatek-add-TOTOLINK-X30-support.patch"
-            PATCH_ID="$(sha256sum ../patches/0001-mediatek-add-TOTOLINK-X30-support.patch | cut -c1-12)"
+            echo "Applying X30 board-support patch..."
+
+            patch \
+              -p1 \
+              -F1 \
+              --no-backup-if-mismatch \
+              < ../patches/0001-mediatek-add-TOTOLINK-X30-support.patch
           fi
 
-          echo "Verifying X30 Ethernet pinctrl:"
-          grep -n "pinctrl-0" \
+          echo "Verifying X30 DTS..."
+
+          test -f \
             target/linux/mediatek/dts/mt7981b-totolink-X30.dts
 
-          if grep -q 'gbe_led0_pins' \
-            target/linux/mediatek/dts/mt7981b-totolink-X30.dts; then
-            echo "ERROR: X30 DTS references gbe_led0_pins."
-            exit 1
-          fi
-
-          grep -q 'pinctrl-0 = <&mdio_pins>;' \
+          grep -q \
+            'compatible = "totolink,x30", "mediatek,mt7981";' \
             target/linux/mediatek/dts/mt7981b-totolink-X30.dts
 
-          echo "Adding X30 FIT sysupgrade handlers"
+          grep -q \
+            'pinctrl-0 = <&mdio_pins>;' \
+            target/linux/mediatek/dts/mt7981b-totolink-X30.dts
+
+          grep -q \
+            'SUPPORTED_DEVICES := totolink,X30 totolink,x30' \
+            target/linux/mediatek/image/filogic.mk
+
+      - name: Add X30 FIT sysupgrade support
+        shell: bash
+        run: |
+          set -e
+          cd openwrt
 
           PLATFORM_SH="target/linux/mediatek/filogic/base-files/lib/upgrade/platform.sh"
 
-          UPPER_COUNT="$(grep -c 'totolink,X30' "${PLATFORM_SH}" || true)"
-          LOWER_COUNT="$(grep -c 'totolink,x30' "${PLATFORM_SH}" || true)"
+          UPPER_COUNT="$(grep -c 'totolink,X30' "$PLATFORM_SH" || true)"
+          LOWER_COUNT="$(grep -c 'totolink,x30' "$PLATFORM_SH" || true)"
 
-          if [ "${UPPER_COUNT}" -eq 0 ] && [ "${LOWER_COUNT}" -eq 0 ]; then
-            sed -i '/\tnetcore,n60-pro|\\/a\
-          \ttotolink,X30|\\\
-          \ttotolink,x30|\\' "${PLATFORM_SH}"
-          elif [ "${UPPER_COUNT}" -eq 2 ] && [ "${LOWER_COUNT}" -eq 2 ]; then
-            echo "X30 FIT sysupgrade handlers already exist."
+          echo "Before patch:"
+          echo "totolink,X30 = ${UPPER_COUNT}"
+          echo "totolink,x30 = ${LOWER_COUNT}"
+
+          if [ "$UPPER_COUNT" -eq 0 ] && \
+             [ "$LOWER_COUNT" -eq 0 ]; then
+
+            echo "Applying X30 FIT patch..."
+
+            patch \
+              -p1 \
+              -F1 \
+              --no-backup-if-mismatch \
+              < ../patches/0002-mediatek-filogic-add-totolink-x30-fit-upgrade.patch
           else
-            echo "ERROR: X30 FIT handlers are incomplete or inconsistent."
-            echo "totolink,X30 count: ${UPPER_COUNT}"
-            echo "totolink,x30 count: ${LOWER_COUNT}"
+            echo "X30 FIT entries already present."
+          fi
+
+          UPPER_COUNT="$(grep -c 'totolink,X30' "$PLATFORM_SH" || true)"
+          LOWER_COUNT="$(grep -c 'totolink,x30' "$PLATFORM_SH" || true)"
+
+          echo "After patch:"
+          echo "totolink,X30 = ${UPPER_COUNT}"
+          echo "totolink,x30 = ${LOWER_COUNT}"
+
+          if [ "$UPPER_COUNT" -ne 2 ] || \
+             [ "$LOWER_COUNT" -ne 2 ]; then
+            echo "ERROR: X30 FIT sysupgrade entries are incomplete."
             exit 1
           fi
 
-          UPPER_COUNT="$(grep -c 'totolink,X30' "${PLATFORM_SH}" || true)"
-          LOWER_COUNT="$(grep -c 'totolink,x30' "${PLATFORM_SH}" || true)"
-
-          if [ "${UPPER_COUNT}" -ne 2 ] || [ "${LOWER_COUNT}" -ne 2 ]; then
-            echo "ERROR: X30 FIT handlers must appear exactly twice."
-            exit 1
-          fi
-
-          echo "Verifying X30 image profile"
-          grep -n "Device/totolink_X30" target/linux/mediatek/image/filogic.mk
-          grep -n "TARGET_DEVICES += totolink_X30" target/linux/mediatek/image/filogic.mk
-          grep -n "SUPPORTED_DEVICES := .*totolink,X30.*totolink,x30" target/linux/mediatek/image/filogic.mk
-
-          echo "Verifying normalized X30 board name and rootdisk"
-          grep -n 'compatible = "totolink,x30", "mediatek,mt7981";' target/linux/mediatek/dts/mt7981b-totolink-X30.dts
-          grep -n 'rootdisk = <&ubi_rootdisk>;' target/linux/mediatek/dts/mt7981b-totolink-X30.dts
-          grep -n 'volname = "fit";' target/linux/mediatek/dts/mt7981b-totolink-X30.dts
-
-          echo "Verifying X30 FIT upgrade handlers"
-          grep -n "totolink,X30" target/linux/mediatek/filogic/base-files/lib/upgrade/platform.sh
-          grep -n "totolink,x30" target/linux/mediatek/filogic/base-files/lib/upgrade/platform.sh
-
-          TAG="x30-${IMMORTALWRT_VERSION}-${UPSTREAM_SHA}-${PATCH_ID}-${CONFIG_HASH}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "patch_id=${PATCH_ID}" >> "$GITHUB_OUTPUT"
-
-          if git -C "$GITHUB_WORKSPACE" ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Release tag ${TAG} already exists. Nothing new to build."
-            echo "skip_build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_build=false" >> "$GITHUB_OUTPUT"
-          fi
-          
-
-      - name: Update feeds
-        if: steps.prep.outputs.skip_build != 'true'
-        working-directory: openwrt
+      - name: Configure X30
         shell: bash
         run: |
-          set -euo pipefail
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-
-      - name: Configure build
-        if: steps.prep.outputs.skip_build != 'true'
-        working-directory: openwrt
-        shell: bash
-        run: |
-          set -euo pipefail
+          set -e
+          cd openwrt
 
           cp ../config/x30.config .config
-          echo "Seed config:"
+
+          echo "X30 seed config:"
           cat .config
 
           make defconfig
 
-          echo "Resolved important config lines:"
-          grep -E 'CONFIG_TARGET_mediatek|CONFIG_TARGET_mediatek_filogic_DEVICE_totolink_X30|CONFIG_BUILD_LOG' .config || true
-          required_config_symbols=(
-            CONFIG_TARGET_mediatek_filogic_DEVICE_totolink_X30
-          )
+          echo
+          echo "Resolved X30 configuration:"
+          grep -E \
+            'CONFIG_TARGET_mediatek|DEVICE_totolink_X30|CONFIG_PACKAGE_luci' \
+            .config || true
 
-          for symbol in "${required_config_symbols[@]}"; do
-            if ! grep -q "^${symbol}=y" .config; then
-              echo "ERROR: Required symbol ${symbol}=y was not selected after make defconfig."
-              grep -Ei 'x30|totolink|CONFIG_TARGET_mediatek' .config || true
-              exit 1
-            fi
-          done
+          grep -q \
+            '^CONFIG_TARGET_mediatek_filogic_DEVICE_totolink_X30=y' \
+            .config
 
-          echo "ImmortalWrt diffconfig:"
+          echo
+          echo "Diffconfig:"
           ./scripts/diffconfig.sh
 
-          echo "ImmortalWrt make info entries matching x30/totolink:"
-          make info | grep -Ei 'x30|totolink' || true
-
       - name: Download sources
-        if: steps.prep.outputs.skip_build != 'true'
         working-directory: openwrt
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           make download -j"$(nproc)"
 
-      - name: Build firmware
-        if: steps.prep.outputs.skip_build != 'true'
+      - name: Build KWRT X30
         working-directory: openwrt
         shell: bash
         run: |
           set -o pipefail
-          df -h
 
-          if ! make -j"${BUILD_JOBS}" V=s 2>&1 | tee ../build.log; then
-            echo "Parallel build failed. Retrying single-threaded to expose exact failing command..."
-            make -j1 V=sc 2>&1 | tee ../build-single.log
+          if ! make -j"${BUILD_JOBS}" V=s \
+            2>&1 | tee ../build.log; then
+
+            echo
+            echo "Parallel build failed."
+            echo "Retrying with one job for useful error output..."
+
+            make -j1 V=sc \
+              2>&1 | tee ../build-single.log
+
             exit 1
           fi
 
-          df -h
-
-      - name: Collect artifacts
-        if: steps.prep.outputs.skip_build != 'true'
+      - name: Collect firmware
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           mkdir -p out
-          cd openwrt
-          TARGET_DIR="bin/targets/mediatek/filogic"
 
-          echo "Full target directory contents:"
-          find "${TARGET_DIR}" -maxdepth 2 -type f -printf '%p\n' | sort
+          TARGET_DIR="openwrt/bin/targets/mediatek/filogic"
 
-          echo "Searching for X30/TOTOLINK firmware artifacts:"
-          find "${TARGET_DIR}" -maxdepth 1 -type f \
-            \( -iname '*x30*' -o -iname '*totolink*' \) \
-            -printf '%p\n' | sort | tee ../x30-artifact-list.txt
+          echo "Files generated:"
+          find "$TARGET_DIR" \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' | sort
 
-          if [ ! -s ../x30-artifact-list.txt ]; then
-            echo "ERROR: No X30/TOTOLINK firmware artifacts found."
-            exit 1
-          fi
+          find "$TARGET_DIR" \
+            -maxdepth 1 \
+            -type f \
+            \( \
+              -iname '*totolink*x30*' \
+              -o \
+              -iname '*x30*' \
+            \) \
+            -exec cp -v {} out/ \;
 
-          while IFS= read -r artifact; do
-            cp -v "$artifact" ../out/
-          done < ../x30-artifact-list.txt
+          cp openwrt/.config out/x30-full.config
+          openwrt/scripts/diffconfig.sh > out/x30.diffconfig
 
-          for meta in sha256sums config.buildinfo feeds.buildinfo version.buildinfo profiles.json; do
-            [ -f "${TARGET_DIR}/${meta}" ] && cp -v "${TARGET_DIR}/${meta}" "../out/${meta}"
-          done
+          git -C openwrt rev-parse HEAD \
+            > out/openwrt-git-head.txt
 
-          ./scripts/diffconfig.sh > ../out/x30.diffconfig
-          git rev-parse HEAD > ../out/immortalwrt-git-head.txt
-          git log -1 --oneline > ../out/immortalwrt-git-log.txt
-          cp ../x30-artifact-list.txt ../out/x30-artifact-list.txt
+          git -C kwrt rev-parse HEAD \
+            > out/kwrt-git-head.txt
 
-          cd ../out
+          cd out
           sha256sum * > BUILD-SHA256SUMS.txt
+
+          echo
+          echo "Final X30 artifacts:"
           ls -lh
 
-          SYSUPGRADE_IMAGE="$(find . -maxdepth 1 -type f \( -iname '*x30*sysupgrade*.bin' -o -iname '*totolink*sysupgrade*.bin' \) | sort | head -n 1)"
-          if [ -z "${SYSUPGRADE_IMAGE}" ]; then
-            echo "ERROR: No X30/TOTOLINK sysupgrade image found."
-            exit 1
-          fi
-          echo "Found sysupgrade image: ${SYSUPGRADE_IMAGE}"
+          if ! find . \
+            -maxdepth 1 \
+            -type f \
+            -iname '*x30*sysupgrade*.bin' \
+            | grep -q .; then
 
-          FWTOOL="$(find ../openwrt/staging_dir -path '*/bin/fwtool' -type f | sort | head -n 1)"
-          if [ -z "${FWTOOL}" ] || [ ! -x "${FWTOOL}" ]; then
-            echo "ERROR: Could not find host fwtool to validate sysupgrade metadata."
+            echo "ERROR: X30 sysupgrade image was not generated."
             exit 1
           fi
 
-          "${FWTOOL}" -q -i x30-sysupgrade.meta.json "${SYSUPGRADE_IMAGE}"
-
-          echo "Sysupgrade metadata:"
-          cat x30-sysupgrade.meta.json
-
-          jq -e '.supported_devices | index("totolink,X30")' x30-sysupgrade.meta.json >/dev/null
-          jq -e '.supported_devices | index("totolink,x30")' x30-sysupgrade.meta.json >/dev/null
-
-          X30_MANIFEST="$(find . -maxdepth 1 -type f \( -iname '*x30*.manifest' -o -iname '*totolink*.manifest' \) | sort | head -n 1)"
-          if [ -z "${X30_MANIFEST}" ]; then
-            echo "ERROR: No X30/TOTOLINK manifest found."
-            exit 1
-          fi
-          echo "Found X30 manifest: ${X30_MANIFEST}"
-
-         
-      - name: Upload diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
         with:
-          name: failed-build-diagnostics
+          name: kwrt-totolink-x30
+          path: out/
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kwrt-x30-build-failure
           path: |
             build.log
             build-single.log
-            x30-artifact-list.txt
             openwrt/.config
-            openwrt/tmp/.config*
             openwrt/logs/**
-            openwrt/bin/targets/mediatek/filogic/**
           if-no-files-found: ignore
-
-      - name: Upload workflow artifact
-        if: steps.prep.outputs.skip_build != 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: immortalwrt-totolink-x30-${{ env.IMMORTALWRT_VERSION }}
-          path: out/*
-          if-no-files-found: error
-
-      - name: Create GitHub release
-        if: steps.prep.outputs.skip_build != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.prep.outputs.tag }}
-          IMMORTALWRT_REF: ${{ env.IMMORTALWRT_REF }}
-          IMMORTALWRT_VERSION: ${{ env.IMMORTALWRT_VERSION }}
-          UPSTREAM_SHA: ${{ steps.prep.outputs.upstream_sha }}
-          PATCH_ID: ${{ steps.prep.outputs.patch_id }}
-          CONFIG_HASH: ${{ steps.prep.outputs.config_hash }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gh release create "${TAG}" out/* \
-            --title "TOTOLINK X30 ImmortalWrt ${IMMORTALWRT_VERSION} build ${TAG}" \
-            --notes "Custom TOTOLINK X30 build from ImmortalWrt ${IMMORTALWRT_REF}.
-
-          Upstream ImmortalWrt source SHA: ${UPSTREAM_SHA}
-          X30 patch: ${PATCH_ID}
-          Build config/patch/workflow hash: ${CONFIG_HASH}
-          Target: mediatek/filogic
-          Device profile: totolink_X30
-
-          This build includes:
-          - TOTOLINK X30 board support
-          - TOTOLINK X30 FIT sysupgrade platform handler
-          - Legacy board-name compatibility for totolink,X30
-          - Normalized board-name compatibility for totolink,x30
-
-
-          Routine upgrades should use only:
-          immortalwrt-mediatek-filogic-totolink_X30-squashfs-sysupgrade.bin
-
-          Do not flash preloader.bin or bl31-uboot.fip for routine upgrades."
