@@ -228,8 +228,18 @@ jobs:
            					   const struct nf_ct_event *item)
           EOF
 
-          echo "Added kernel 6.12 conntrack compatibility patch:"
+          cat > target/linux/generic/hack-6.12/955-fix-ctnetlink-expect-unused-function.patch <<'EOF'
+          --- a/net/netfilter/nf_conntrack_netlink.c
+          +++ b/net/netfilter/nf_conntrack_netlink.c
+          @@ -3099,2 +3099,2 @@
+          -static int
+          +static int __maybe_unused
+           ctnetlink_expect_event(unsigned int events, const struct nf_exp_event *item)
+          EOF
+
+          echo "Added kernel 6.12 conntrack compatibility patches:"
           cat target/linux/generic/hack-6.12/954-fix-conntrack-unused-function.patch
+          cat target/linux/generic/hack-6.12/955-fix-ctnetlink-expect-unused-function.patch
 
       - name: Apply TOTOLINK X30 support
         shell: bash
