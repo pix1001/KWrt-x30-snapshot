@@ -244,7 +244,7 @@ jobs:
             'SUPPORTED_DEVICES := totolink,X30 totolink,x30' \
             target/linux/mediatek/image/filogic.mk
 
-      - name: Add X30 FIT sysupgrade support
+           - name: Add X30 FIT sysupgrade support
         shell: bash
         run: |
           set -e
@@ -252,31 +252,59 @@ jobs:
 
           PLATFORM_SH="target/linux/mediatek/filogic/base-files/lib/upgrade/platform.sh"
 
+          echo "Adding X30 to FIT upgrade/check lists..."
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("target/linux/mediatek/filogic/base-files/lib/upgrade/platform.sh")
+          s = p.read_text()
+
+          anchor = "\twavlink,wl-wnt100x3-ubootmod|\\\n"
+
+          addition = (
+              "\ttotolink,X30|\\\n"
+              "\ttotolink,x30|\\\n"
+              + anchor
+          )
+
+          upper = s.count("totolink,X30")
+          lower = s.count("totolink,x30")
+
+          print(f"Before: totolink,X30={upper}, totolink,x30={lower}")
+
+          if upper == 0 and lower == 0:
+              count = s.count(anchor)
+
+              if count != 2:
+                  raise SystemExit(
+                      f"ERROR: expected 2 FIT anchors, found {count}"
+                  )
+
+              s = s.replace(anchor, addition)
+              p.write_text(s)
+
+          elif upper == 2 and lower == 2:
+              print("X30 FIT entries already present.")
+
+          else:
+              raise SystemExit(
+                  f"ERROR: unexpected existing X30 entries: "
+                  f"upper={upper}, lower={lower}"
+              )
+          PY
+
+          echo
+          echo "X30 entries after modification:"
+          grep -n -B3 -A3 \
+            -E 'totolink,X30|totolink,x30' \
+            "$PLATFORM_SH"
+
           UPPER_COUNT="$(grep -c 'totolink,X30' "$PLATFORM_SH" || true)"
           LOWER_COUNT="$(grep -c 'totolink,x30' "$PLATFORM_SH" || true)"
 
-          echo "Before patch:"
-          echo "totolink,X30 = ${UPPER_COUNT}"
-          echo "totolink,x30 = ${LOWER_COUNT}"
-
-          if [ "$UPPER_COUNT" -eq 0 ] && \
-             [ "$LOWER_COUNT" -eq 0 ]; then
-
-            echo "Applying X30 FIT patch..."
-
-            patch \
-              -p1 \
-              -F1 \
-              --no-backup-if-mismatch \
-              < ../patches/0002-mediatek-filogic-add-totolink-x30-fit-upgrade.patch
-          else
-            echo "X30 FIT entries already present."
-          fi
-
-          UPPER_COUNT="$(grep -c 'totolink,X30' "$PLATFORM_SH" || true)"
-          LOWER_COUNT="$(grep -c 'totolink,x30' "$PLATFORM_SH" || true)"
-
-          echo "After patch:"
+          echo
+          echo "Final count:"
           echo "totolink,X30 = ${UPPER_COUNT}"
           echo "totolink,x30 = ${LOWER_COUNT}"
 
