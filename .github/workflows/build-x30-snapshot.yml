@@ -244,7 +244,7 @@ jobs:
             'SUPPORTED_DEVICES := totolink,X30 totolink,x30' \
             target/linux/mediatek/image/filogic.mk
 
-           - name: Add X30 FIT sysupgrade support
+      - name: Add X30 FIT sysupgrade support
         shell: bash
         run: |
           set -e
