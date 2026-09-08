@@ -207,6 +207,34 @@ jobs:
               ! -name '*.bin.patch' \
               -print0 | sort -z
           )
+      - name: Fix KWRT APK base-files version
+        shell: bash
+        run: |
+          set -e
+          cd openwrt
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("package/base-files/Makefile")
+          s = p.read_text()
+
+          old = '$(lastword $(subst -, ,$(REVISION)))'
+          new = '$(subst .,,$(lastword $(subst -, ,$(REVISION))))'
+
+          count = s.count(old)
+          print(f"Found {count} base-files revision expressions")
+
+          if count != 2:
+              raise SystemExit(
+                  f"ERROR: expected 2 revision expressions, found {count}"
+              )
+
+          p.write_text(s.replace(old, new))
+          PY
+
+          echo "Patched base-files APK version:"
+          grep -n -E 'VERSION:=|base-files.version' package/base-files/Makefile
 
       - name: Fix KWRT conntrack build on kernel 6.12
         shell: bash
