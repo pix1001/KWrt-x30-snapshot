@@ -150,7 +150,7 @@ jobs:
 
           # File overlay KWRT
           cp -Rf ./diy/* ./ 2>/dev/null || true
-
+          
       - name: Apply KWRT patches
         shell: bash
         run: |
@@ -169,6 +169,7 @@ jobs:
 
           while IFS= read -r -d '' patchfile; do
             echo "Reverting: $patchfile"
+
             patch \
               -d ./ \
               -R \
@@ -176,6 +177,7 @@ jobs:
               -p1 \
               -F1 \
               -i "$patchfile"
+
           done < <(
             find devices/mediatek_filogic/patches \
               -maxdepth 1 \
@@ -188,12 +190,14 @@ jobs:
 
           while IFS= read -r -d '' patchfile; do
             echo "Applying: $patchfile"
+
             patch \
               -d ./ \
               --no-backup-if-mismatch \
               -p1 \
               -F1 \
               -i "$patchfile"
+
           done < <(
             find devices/mediatek_filogic/patches \
               -maxdepth 1 \
@@ -203,6 +207,29 @@ jobs:
               ! -name '*.bin.patch' \
               -print0 | sort -z
           )
+
+      - name: Fix KWRT conntrack build on kernel 6.12
+        shell: bash
+        run: |
+          set -e
+          cd openwrt
+
+          cat > target/linux/generic/hack-6.12/954-fix-conntrack-unused-function.patch <<'EOF'
+          --- a/net/netfilter/nf_conntrack_ecache.c
+          +++ b/net/netfilter/nf_conntrack_ecache.c
+          @@ -127,7 +127,7 @@ static void ecache_work(struct work_struct *work)
+           		schedule_delayed_work(&cnet->ecache.dwork, delay);
+           }
+           
+          -static int __nf_conntrack_eventmask_report(struct nf_conntrack_ecache *e,
+          +static int __maybe_unused __nf_conntrack_eventmask_report(struct nf_conntrack_ecache *e,
+           					   const u32 events,
+           					   const u32 missed,
+           					   const struct nf_ct_event *item)
+          EOF
+
+          echo "Added kernel 6.12 conntrack compatibility patch:"
+          cat target/linux/generic/hack-6.12/954-fix-conntrack-unused-function.patch
 
       - name: Apply TOTOLINK X30 support
         shell: bash
