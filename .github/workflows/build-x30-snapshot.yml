@@ -359,14 +359,11 @@ jobs:
 
             echo
             echo "Parallel build failed."
-            echo "Retrying with one job for useful error output..."
+            echo "Retrying with one job..."
 
             make -j1 V=sc \
               2>&1 | tee ../build-single.log
-
-            exit 1
           fi
-
       - name: Collect firmware
         shell: bash
         run: |
