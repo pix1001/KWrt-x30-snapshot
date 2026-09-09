@@ -14,14 +14,12 @@ on:
 
 permissions:
   contents: read
-permissions:
-  contents: read
 
 env:
   KWRT_BRANCH: "25.12"
   OPENWRT_BRANCH: "openwrt-25.12"
   BUILD_JOBS: "2"
-
+  
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -589,11 +587,60 @@ jobs:
           make -j"${BUILD_JOBS}" V=s \
             2>&1 | tee ../build.log
 
+      - name: Collect firmware
+        if: ${{ inputs.build_mode == 'full' }}
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p out
+
+          TARGET_DIR="openwrt/bin/targets/mediatek/filogic"
+
+          echo "Files generated:"
+          find "$TARGET_DIR" \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' | sort
+
+          find "$TARGET_DIR" \
+            -maxdepth 1 \
+            -type f \
+            \( \
+              -iname '*totolink*x30*' \
+              -o \
+              -iname '*x30*' \
+            \) \
+            -exec cp -v {} out/ \;
+
+          cp openwrt/.config out/x30-full.config
+          openwrt/scripts/diffconfig.sh > out/x30.diffconfig
+
+          git -C openwrt rev-parse HEAD \
+            > out/openwrt-git-head.txt
+
+          git -C kwrt rev-parse HEAD \
+            > out/kwrt-git-head.txt
+
+          cd out
+          sha256sum * > BUILD-SHA256SUMS.txt
+
+          echo
+          echo "Final X30 artifacts:"
+          ls -lh
+
+          if ! find . \
+            -maxdepth 1 \
+            -type f \
+            -iname '*x30*sysupgrade*.bin' \
+            | grep -q .; then
+
+            echo "ERROR: X30 sysupgrade image was not generated."
+            exit 1
+          fi
+
       - name: Upload firmware
         if: ${{ inputs.build_mode == 'full' }}
-        uses: actions/upload-artifact@v4
-        
-      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: kwrt-totolink-x30
@@ -610,3 +657,4 @@ jobs:
             build-debug.log
             openwrt/.config
             openwrt/logs/**
+          if-no-files-found: ignore
