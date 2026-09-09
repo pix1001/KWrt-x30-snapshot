@@ -217,6 +217,33 @@ jobs:
               -print0 | sort -z
           )
 
+      - name: Fix KWRT APK Packages manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd openwrt
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("Makefile")
+          s = p.read_text()
+
+          old = "\tcp -f $(BIN_DIR)/packages/Packages.manifest $(BIN_DIR)/\n"
+          new = "\t[ ! -f $(BIN_DIR)/packages/Packages.manifest ] || cp -f $(BIN_DIR)/packages/Packages.manifest $(BIN_DIR)/\n"
+
+          if old in s:
+              print("Fixing obsolete Packages.manifest copy for APK...")
+              s = s.replace(old, new, 1)
+              p.write_text(s)
+          elif new in s:
+              print("Packages.manifest compatibility fix already applied.")
+          else:
+              raise SystemExit("ERROR: Packages.manifest line not found in Makefile")
+          PY
+
+          grep -n "Packages.manifest" Makefile || true
+
       - name: Fix KWRT dnsmasq APK ownership
         shell: bash
         run: |
