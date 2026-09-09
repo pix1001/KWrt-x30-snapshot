@@ -207,6 +207,83 @@ jobs:
               ! -name '*.bin.patch' \
               -print0 | sort -z
           )
+
+      - name: Fix KWRT dnsmasq APK ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd openwrt
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("package/network/services/dnsmasq/Makefile")
+          s = p.read_text()
+
+          # KWRT memasukkan library milik paket lain langsung ke dnsmasq-full.
+          # Ini tidak cocok dengan APK karena menyebabkan file ownership conflict.
+          libs = [
+              "libnftables.so.1",
+              "libjansson.so.4",
+              "libnftnl.so.11",
+              "libmnl.so.0",
+          ]
+
+          lines = s.splitlines()
+          new_lines = []
+
+          for line in lines:
+              if "$(INSTALL_BIN)" in line and any(lib in line for lib in libs):
+                  print("Removing:", line.strip())
+                  continue
+              new_lines.append(line)
+
+          s = "\n".join(new_lines) + "\n"
+
+          # Kembalikan dependency nftables-json yang sebelumnya dihapus patch KWRT.
+          if "PACKAGE_dnsmasq_full_nftset:nftables-json" not in s:
+              pattern = (
+                  r'(\+PACKAGE_dnsmasq_full_conntrack:'
+                  r'libnetfilter-conntrack)(\n)'
+              )
+
+              replacement = (
+                  r'\1 \\\n'
+                  r'\t+PACKAGE_dnsmasq_full_nftset:nftables-json\n'
+              )
+
+              s, count = re.subn(
+                  pattern,
+                  replacement,
+                  s,
+                  count=1
+              )
+
+              if count != 1:
+                  raise SystemExit(
+                      "ERROR: cannot restore dnsmasq nftables-json dependency"
+                  )
+
+          p.write_text(s)
+          PY
+
+          echo
+          echo "Checking dnsmasq Makefile..."
+
+          if grep -nE \
+            '\$\(INSTALL_BIN\).*lib(nftables|jansson|nftnl|mnl).*\.so' \
+            package/network/services/dnsmasq/Makefile; then
+              echo "ERROR: dnsmasq still bundles foreign shared libraries"
+              exit 1
+          fi
+
+          grep -nE \
+            'PACKAGE_dnsmasq_full_(conntrack|nftset)' \
+            package/network/services/dnsmasq/Makefile
+
+          echo "dnsmasq APK ownership fix OK"
+          
       - name: Fix KWRT APK package versions
         shell: bash
         run: |
@@ -482,16 +559,14 @@ jobs:
         run: |
           set -o pipefail
 
-          if ! make -j"${BUILD_JOBS}" V=s \
-            2>&1 | tee ../build.log; then
+              - name: Build KWRT X30
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            echo
-            echo "Parallel build failed."
-            echo "Retrying with one job..."
-
-            make -j1 V=sc \
-              2>&1 | tee ../build-single.log
-          fi
+          make -j"${BUILD_JOBS}" V=s \
+            2>&1 | tee ../build.log
       - name: Collect firmware
         shell: bash
         run: |
