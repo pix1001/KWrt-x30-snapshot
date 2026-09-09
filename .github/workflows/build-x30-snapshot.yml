@@ -2,16 +2,6 @@ name: Build TOTOLINK X30 KWRT
 
 on:
   workflow_dispatch:
-    inputs:
-      build_mode:
-        description: "Mode build"
-        required: true
-        default: "full"
-        type: choice
-        options:
-          - debug
-          - full
-
 permissions:
   contents: write
 
@@ -589,21 +579,7 @@ jobs:
           set -e
           make download -j"$(nproc)"
 
-      - name: Debug build KWRT X30
-        if: ${{ inputs.build_mode == 'debug' }}
-        working-directory: openwrt
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== DEBUG BUILD ==="
-          echo "CPU: $(nproc)"
-
-          make -j"$(nproc)" V=s \
-            2>&1 | tee ../build-debug.log
-
-      - name: Full build KWRT X30
-        if: ${{ inputs.build_mode == 'full' }}
+      - name: Build KWRT X30
         working-directory: openwrt
         shell: bash
         run: |
@@ -615,7 +591,6 @@ jobs:
             2>&1 | tee ../build.log
 
       - name: Collect firmware
-        if: ${{ inputs.build_mode == 'full' }}
         shell: bash
         run: |
           set -e
@@ -667,7 +642,6 @@ jobs:
           fi
 
       - name: Upload firmware
-        if: ${{ inputs.build_mode == 'full' }}
         uses: actions/upload-artifact@v4
         with:
           name: kwrt-totolink-x30
@@ -675,7 +649,6 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: ${{ inputs.build_mode == 'full' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -697,7 +670,6 @@ jobs:
           name: kwrt-x30-build-failure
           path: |
             build.log
-            build-debug.log
             openwrt/.config
             openwrt/logs/**
           if-no-files-found: ignore
