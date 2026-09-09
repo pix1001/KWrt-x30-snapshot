@@ -2,7 +2,24 @@ name: Build TOTOLINK X30 KWRT
 
 on:
   workflow_dispatch:
-
+    inputs:
+      build_mode:
+        description: "Mode build"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - full
+    inputs:
+      build_mode:
+        description: "Mode build"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - full
 permissions:
   contents: read
 
@@ -553,71 +570,35 @@ jobs:
           set -e
           make download -j"$(nproc)"
 
-      - name: Build KWRT X30
-        working-directory: openwrt
-        shell: bash
-        run: |
-          set -o pipefail
-
-              - name: Build KWRT X30
+      - name: Debug build KWRT X30
+        if: ${{ inputs.build_mode == 'debug' }}
         working-directory: openwrt
         shell: bash
         run: |
           set -euo pipefail
 
-          make -j"${BUILD_JOBS}" V=s \
-            2>&1 | tee ../build.log
-      - name: Collect firmware
+          echo "=== DEBUG BUILD ==="
+          echo "CPU: $(nproc)"
+
+          make -j"$(nproc)" V=s \
+            2>&1 | tee ../build-debug.log
+
+      - name: Full build KWRT X30
+        if: ${{ inputs.build_mode == 'full' }}
+        working-directory: openwrt
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          mkdir -p out
+          echo "=== FULL BUILD ==="
 
-          TARGET_DIR="openwrt/bin/targets/mediatek/filogic"
+          make -j"${BUILD_JOBS}" V=s \
+            2>&1 | tee ../build.log
 
-          echo "Files generated:"
-          find "$TARGET_DIR" \
-            -maxdepth 1 \
-            -type f \
-            -printf '%f\n' | sort
-
-          find "$TARGET_DIR" \
-            -maxdepth 1 \
-            -type f \
-            \( \
-              -iname '*totolink*x30*' \
-              -o \
-              -iname '*x30*' \
-            \) \
-            -exec cp -v {} out/ \;
-
-          cp openwrt/.config out/x30-full.config
-          openwrt/scripts/diffconfig.sh > out/x30.diffconfig
-
-          git -C openwrt rev-parse HEAD \
-            > out/openwrt-git-head.txt
-
-          git -C kwrt rev-parse HEAD \
-            > out/kwrt-git-head.txt
-
-          cd out
-          sha256sum * > BUILD-SHA256SUMS.txt
-
-          echo
-          echo "Final X30 artifacts:"
-          ls -lh
-
-          if ! find . \
-            -maxdepth 1 \
-            -type f \
-            -iname '*x30*sysupgrade*.bin' \
-            | grep -q .; then
-
-            echo "ERROR: X30 sysupgrade image was not generated."
-            exit 1
-          fi
-
+      - name: Upload firmware
+        if: ${{ inputs.build_mode == 'full' }}
+        uses: actions/upload-artifact@v4
+        
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
@@ -632,7 +613,6 @@ jobs:
           name: kwrt-x30-build-failure
           path: |
             build.log
-            build-single.log
+            build-debug.log
             openwrt/.config
             openwrt/logs/**
-          if-no-files-found: ignore
