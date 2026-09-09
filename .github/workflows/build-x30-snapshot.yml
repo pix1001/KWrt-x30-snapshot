@@ -6,7 +6,7 @@ on:
       build_mode:
         description: "Mode build"
         required: true
-        default: "debug"
+        default: "full"
         type: choice
         options:
           - debug
