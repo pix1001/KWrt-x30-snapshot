@@ -11,15 +11,9 @@ on:
         options:
           - debug
           - full
-    inputs:
-      build_mode:
-        description: "Mode build"
-        required: true
-        default: "debug"
-        type: choice
-        options:
-          - debug
-          - full
+
+permissions:
+  contents: read
 permissions:
   contents: read
 
