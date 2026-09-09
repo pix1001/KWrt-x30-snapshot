@@ -641,7 +641,7 @@ jobs:
             -exec cp -v {} out/ \;
 
           cp openwrt/.config out/x30-full.config
-          openwrt/scripts/diffconfig.sh > out/x30.diffconfig
+          (cd openwrt && ./scripts/diffconfig.sh) > out/x30.diffconfig
 
           git -C openwrt rev-parse HEAD \
             > out/openwrt-git-head.txt
