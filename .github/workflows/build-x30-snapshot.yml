@@ -13,7 +13,7 @@ on:
           - full
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   KWRT_BRANCH: "25.12"
@@ -673,6 +673,22 @@ jobs:
           name: kwrt-totolink-x30
           path: out/
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ inputs.build_mode == 'full' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG="kwrt-x30-${{ github.run_number }}"
+
+          gh release create "$TAG" \
+            out/* \
+            --target "${{ github.sha }}" \
+            --title "KWRT TOTOLINK X30 Build ${{ github.run_number }}" \
+            --notes "Automated KWRT 25.12 build for TOTOLINK X30."
 
       - name: Upload logs on failure
         if: failure()
